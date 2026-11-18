@@ -71,8 +71,15 @@ jobs:
       - name: 导入工程资源
         run: |
           set -uo pipefail
-          "$GODOT" --headless --path . --import 2>&1 | tail -n 80
+          "$GODOT" --headless --path . --import 2>&1 | tee /tmp/import.log | tail -n 80
           test -d .godot || { echo "::error::导入失败，没有生成 .godot"; exit 1; }
+          echo "== 扩展加载情况 =="
+          cat .godot/extension_list.cfg 2>/dev/null || echo "(没有 extension_list.cfg)"
+          if ! grep -qi 'cubism' .godot/extension_list.cfg 2>/dev/null; then
+            echo "::error::编辑器未加载到 gd_cubism 扩展，导出必然缺 Live2D"
+            grep -iE 'GDExtension|gdextension|dlopen|Failed loading' /tmp/import.log | head -n 15
+            exit 1
+          fi
 
       - name: 导出 Xcode 工程
         run: |
