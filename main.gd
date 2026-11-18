@@ -221,9 +221,11 @@ func _load_selection() -> void:
 	var actors: Array = ACTORS if actor.selected == 0 else [ACTORS[actor.selected - 1]]
 	if mode.selected == 0:
 		for identity in actors:
-			var model := GDCubismUserModel.new()
+			var model = ClassDB.instantiate("GDCubismUserModel")
+			if model == null:
+				continue
 			model.assets = str(catalog.live2d[identity].model)
-			model.playback_process_mode = GDCubismUserModel.MANUAL
+			model.playback_process_mode = ClassDB.class_get_integer_constant("GDCubismUserModel", "MANUAL")
 			world.add_child(model)
 			var defaults: Dictionary = JSON.parse_string(FileAccess.get_file_as_string(catalog.live2d[identity].defaults))
 			for parameter in model.get_parameters():
@@ -306,7 +308,7 @@ func _play_animation(index: int) -> void:
 	selected_animation = animation.get_item_text(index)
 	for model in models:
 		if model.get_motions().has(selected_animation):
-			model.start_motion_loop(selected_animation, 0, GDCubismUserModel.PRIORITY_FORCE, true, true)
+			model.start_motion_loop(selected_animation, 0, ClassDB.class_get_integer_constant("GDCubismUserModel", "PRIORITY_FORCE"), true, true)
 
 
 func _load_spine(index: int) -> void:
@@ -334,15 +336,15 @@ func _load_spine_entry(entry: Dictionary) -> void:
 		push_error("spine_godot 扩展未加载，CG / Spine 模式不可用（Live2D 与立绘不受影响）")
 		return
 	var paths := _spine_paths(entry)
-	var atlas := ClassDB.instantiate("SpineAtlasResource")
-	var skeleton := ClassDB.instantiate("SpineSkeletonFileResource")
+	var atlas: Object = ClassDB.instantiate("SpineAtlasResource")
+	var skeleton: Object = ClassDB.instantiate("SpineSkeletonFileResource")
 	if atlas.call("load_from_atlas_file", paths["atlas"]) != OK:
 		push_error("Spine atlas 加载失败: %s" % paths["atlas"])
 		return
 	if skeleton.call("load_from_file", paths["skeleton"]) != OK:
 		push_error("Spine skeleton 加载失败: %s" % paths["skeleton"])
 		return
-	var data := ClassDB.instantiate("SpineSkeletonDataResource")
+	var data: Object = ClassDB.instantiate("SpineSkeletonDataResource")
 	data.set("atlas_res", atlas)
 	data.set("skeleton_file_res", skeleton)
 	if not data.call("is_skeleton_data_loaded"):
