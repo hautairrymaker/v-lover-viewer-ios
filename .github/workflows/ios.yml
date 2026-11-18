@@ -19,7 +19,7 @@ jobs:
       actions: write
     defaults:
       run:
-        working-directory: ${{ runner.temp }}/viewer-story
+        working-directory: ../viewer-story
     steps:
       - uses: actions/checkout@v4
 
@@ -59,9 +59,9 @@ jobs:
           cp -R "$RUNNER_TEMP/assets/project/." "$RUNNER_TEMP/viewer-input/"
           python3 scripts/assemble_viewer_story.py \
             --viewer "$RUNNER_TEMP/viewer-input" --story "$RUNNER_TEMP/story-player" \
-            --code "$GITHUB_WORKSPACE" --destination "$RUNNER_TEMP/viewer-story"
-          test -f "$RUNNER_TEMP/viewer-story/data/scenario_full.json"
-          du -sh "$RUNNER_TEMP/viewer-story"
+            --code "$GITHUB_WORKSPACE" --destination "$GITHUB_WORKSPACE/../viewer-story"
+          test -f "$GITHUB_WORKSPACE/../viewer-story/data/scenario_full.json"
+          du -sh "$GITHUB_WORKSPACE/../viewer-story"
 
       - name: 安装 Godot 与 iOS 导出模板
         run: |

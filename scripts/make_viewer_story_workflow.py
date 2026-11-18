@@ -5,7 +5,7 @@ root = Path(__file__).resolve().parents[1]
 text = (root / ".github/workflows/story-ios.yml").read_text(encoding="utf-8")
 text = text.replace("Build Standalone Story Player iOS IPA", "Build Viewer With Story iOS IPA")
 text = text.replace("working-directory: ${{ runner.temp }}/story-player",
-                    "working-directory: ${{ runner.temp }}/viewer-story")
+                    "working-directory: ../viewer-story")
 text = text.replace('STORY_SOURCE_TAG: ${{ vars.STORY_SOURCE_TAG }}',
                     'STORY_SOURCE_TAG: story-source-20261118-01')
 text = text.replace("sparse-checkout set vendor", "sparse-checkout set project vendor")
@@ -31,5 +31,6 @@ text = text.replace("grep 'STORY_PLAYER_TEST'", "grep 'VIEWER_STORY_TEST'")
 text = text.replace("VLoverStory.ipa", "VLoverViewer.ipa")
 text = text.replace("V-Lover-Story-unsigned.ipa", "V-Lover-Viewer-Story-unsigned.ipa")
 text = text.replace('TAG="story-build-', 'TAG="viewer-story-build-')
+text = text.replace("$RUNNER_TEMP/viewer-story", "$GITHUB_WORKSPACE/../viewer-story")
 (root / ".github/workflows/viewer-story-ios.yml").write_text(text, encoding="utf-8")
 print("Generated .github/workflows/viewer-story-ios.yml")
