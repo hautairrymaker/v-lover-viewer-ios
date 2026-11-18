@@ -1,4 +1,4 @@
-name: Build iOS IPA
+name: Build Viewer With Story iOS IPA
 
 on:
   workflow_dispatch:
@@ -17,28 +17,51 @@ jobs:
     permissions:
       contents: write
       actions: write
+    defaults:
+      run:
+        working-directory: ${{ runner.temp }}/viewer-story
     steps:
       - uses: actions/checkout@v4
 
       - name: 拉取私有素材仓库
+        working-directory: ${{ github.workspace }}
         env:
           TOKEN: ${{ secrets.ASSETS_TOKEN }}
           REPO: ${{ vars.ASSETS_REPO }}
+          STORY_SOURCE_TAG: story-source-20261118-01
         run: |
           set -euo pipefail
           if [ -z "${TOKEN:-}" ] || [ -z "${REPO:-}" ]; then
             echo "::error::缺少 ASSETS_TOKEN secret 或 ASSETS_REPO 仓库变量（格式 owner/repo）"
             exit 1
           fi
-          git clone --depth 1 "https://x-access-token:${TOKEN}@github.com/${REPO}.git" "$RUNNER_TEMP/assets"
-          # 私有仓库的 project/ 目录直接铺到工程根
-          cp -R "$RUNNER_TEMP/assets/project/." .
-          echo "素材检查："
-          du -sh assets Portraits 2>/dev/null || true
-          test -f catalog.json || { echo "::error::catalog.json 缺失"; exit 1; }
-
-      - name: 准备原生加载器原文件包
-        run: python3 scripts/prepare_native_payload.py
+          git clone --depth 1 --filter=blob:none --sparse "https://x-access-token:${TOKEN}@github.com/${REPO}.git" "$RUNNER_TEMP/assets"
+          if [ -n "${STORY_SOURCE_TAG:-}" ]; then
+            git -C "$RUNNER_TEMP/assets" sparse-checkout set project vendor
+            GH_TOKEN="$TOKEN" gh release download "$STORY_SOURCE_TAG" --repo "$REPO" \
+              --pattern 'story-source.zip.part-*' --pattern 'story-source-manifest.json' \
+              --dir "$RUNNER_TEMP/story-source"
+            python3 scripts/restore_story_source.py "$RUNNER_TEMP/story-source" "$RUNNER_TEMP/story-input"
+            rm -rf "$RUNNER_TEMP/story-source"
+          else
+            git -C "$RUNNER_TEMP/assets" sparse-checkout set project story_project vendor
+            mkdir -p "$RUNNER_TEMP/story-input"
+            cp -R "$RUNNER_TEMP/assets/story_project/." "$RUNNER_TEMP/story-input/"
+            rm -rf "$RUNNER_TEMP/assets/story_project"
+          fi
+          # This is a disposable runner checkout; preserve only the SDK for compilation.
+          rm -rf "$RUNNER_TEMP/assets/.git"
+          python3 scripts/assemble_story_player.py \
+            --source "$RUNNER_TEMP/story-input" \
+            --destination "$RUNNER_TEMP/story-player" --code "$GITHUB_WORKSPACE"
+          mkdir -p "$RUNNER_TEMP/viewer-input"
+          cp -R "$GITHUB_WORKSPACE/." "$RUNNER_TEMP/viewer-input/"
+          cp -R "$RUNNER_TEMP/assets/project/." "$RUNNER_TEMP/viewer-input/"
+          python3 scripts/assemble_viewer_story.py \
+            --viewer "$RUNNER_TEMP/viewer-input" --story "$RUNNER_TEMP/story-player" \
+            --code "$GITHUB_WORKSPACE" --destination "$RUNNER_TEMP/viewer-story"
+          test -f "$RUNNER_TEMP/viewer-story/data/scenario_full.json"
+          du -sh "$RUNNER_TEMP/viewer-story"
 
       - name: 安装 Godot 与 iOS 导出模板
         run: |
@@ -52,6 +75,12 @@ jobs:
           rm -rf "$HOME/Library/Application Support/Godot/export_templates/${GODOT_VERSION}.stable"
           mv "$RUNNER_TEMP/tpl/templates" "$HOME/Library/Application Support/Godot/export_templates/${GODOT_VERSION}.stable"
           ls "$HOME/Library/Application Support/Godot/export_templates/${GODOT_VERSION}.stable" | grep -i ios | head
+
+      - name: 保留原生模型原文件
+        run: python3 scripts/prepare_story_payload.py
+
+      - name: 验证包完整性检查器
+        run: python3 scripts/test_story_pack.py
 
       - name: 安装 scons
         run: |
@@ -75,6 +104,10 @@ jobs:
           set -euo pipefail
           "$GODOT" --headless --path . --import 2>&1 | tee /tmp/import.log | tail -n 80
           test -d .godot || { echo "::error::导入失败，没有生成 .godot"; exit 1; }
+          if grep -qE 'SCRIPT ERROR|^ERROR:' /tmp/import.log; then
+            grep -E 'SCRIPT ERROR|^ERROR:' /tmp/import.log | head -n 20
+            exit 1
+          fi
           echo "== 扩展加载情况 =="
           cat .godot/extension_list.cfg 2>/dev/null || echo "(没有 extension_list.cfg)"
           if ! grep -qi 'cubism' .godot/extension_list.cfg 2>/dev/null; then
@@ -85,6 +118,18 @@ jobs:
 
       - name: 验证原生类真实注册
         run: '"$GODOT" --headless --path . --script res://scripts/check_native_extensions.gd'
+
+      - name: 验证查看器剧情入口播放存读及返回
+        run: |
+          set -euo pipefail
+          VIEWER_STORY_TEST_RESULT="$RUNNER_TEMP/player-test-result.json" \
+            "$GODOT" --headless --path . --script res://scripts/test_viewer_story.gd \
+            > "$RUNNER_TEMP/player-test.log" 2>&1
+          grep 'VIEWER_STORY_TEST' "$RUNNER_TEMP/player-test.log"
+          if grep -qE 'SCRIPT ERROR|^ERROR:' "$RUNNER_TEMP/player-test.log"; then
+            grep -E 'SCRIPT ERROR|^ERROR:' "$RUNNER_TEMP/player-test.log" | head -n 20
+            exit 1
+          fi
 
       - name: 导出 Xcode 工程
         run: |
@@ -100,7 +145,8 @@ jobs:
           fi
           PCK="$(find build/ios -name '*.pck' -print -quit)"
           test -n "$PCK" || { echo "::error::导出没有PCK"; exit 1; }
-          python3 scripts/prepare_native_payload.py --verify-pack "$PCK"
+          python3 scripts/verify_story_pack.py "$PCK" .
+          python3 scripts/prepare_story_payload.py --verify-pack "$PCK"
           GENERATED="$(find build/ios -maxdepth 2 -name '*.xcodeproj' | head -n1)"
           if [ -z "$GENERATED" ]; then
             echo "::error::Godot 没有生成 .xcodeproj"
@@ -165,20 +211,35 @@ jobs:
           rm -rf build/ipa && mkdir -p build/ipa/Payload
           cp -R "$APP" build/ipa/Payload/
           rm -rf "build/ipa/Payload/$(basename "$APP")/_CodeSignature"
-          cd build/ipa && zip -qry "$GITHUB_WORKSPACE/V-Lover-Viewer-unsigned.ipa" Payload
+          PLAYER_ROOT="$PWD"
+          cd build/ipa && zip -qry "$PLAYER_ROOT/V-Lover-Viewer-Story-unsigned.ipa" Payload
           cd - >/dev/null
-          ls -lh V-Lover-Viewer-unsigned.ipa
+          ls -lh V-Lover-Viewer-Story-unsigned.ipa
+          df -h .
 
       - name: 发布到 Release（附件不占 Actions 存储额度）
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          TAG="build-${GITHUB_RUN_NUMBER}"
-          gh release create "$TAG" V-Lover-Viewer-unsigned.ipa \
+          TAG="viewer-story-build-${GITHUB_RUN_NUMBER}"
+          SIZE="$(stat -f%z V-Lover-Viewer-Story-unsigned.ipa)"
+          if [ "$SIZE" -ge 2147483648 ]; then
+            split -b 1900000000 -a 3 V-Lover-Viewer-Story-unsigned.ipa V-Lover-Viewer-Story-unsigned.ipa.part-
+            shasum -a 256 V-Lover-Viewer-Story-unsigned.ipa > IPA_SHA256.txt
+            printf '%s\n' \
+              '分卷仅用于下载，不能直接安装。下载全部part文件后合并成IPA再签名安装。' \
+              'macOS: cat V-Lover-Viewer-Story-unsigned.ipa.part-* > V-Lover-Viewer-Story-unsigned.ipa' \
+              'Windows cmd: copy /b V-Lover-Viewer-Story-unsigned.ipa.part-* V-Lover-Viewer-Story-unsigned.ipa' \
+              '合并后核对IPA_SHA256.txt。' > IPA_DOWNLOAD.txt
+            set -- V-Lover-Viewer-Story-unsigned.ipa.part-* IPA_SHA256.txt IPA_DOWNLOAD.txt
+          else
+            set -- V-Lover-Viewer-Story-unsigned.ipa
+          fi
+          gh release create "$TAG" "$@" --repo "$GITHUB_REPOSITORY" \
             --title "iOS 未签名包 $TAG" \
             --notes "Godot ${GODOT_VERSION} 构建，Spine 编译结果: ${{ steps.spine.outcome }}。未签名，需自签后安装。"
-          echo "下载地址: https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/V-Lover-Viewer-unsigned.ipa"
+          echo "下载页面: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
 
       - name: 汇总
         if: always()
@@ -187,5 +248,5 @@ jobs:
             echo "### 构建结果"
             echo "- Godot: ${GODOT_VERSION}"
             echo "- Spine 编译: ${{ steps.spine.outcome }}"
-            echo "- 产物: V-Lover-Viewer-unsigned.ipa"
+            echo "- 产物: V-Lover-Viewer-Story-unsigned.ipa"
           } >> "$GITHUB_STEP_SUMMARY"
