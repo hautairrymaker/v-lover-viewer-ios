@@ -16,7 +16,7 @@ def assemble(viewer, story, code, destination):
         raise FileExistsError("Use a new destination; existing projects are preserved")
     shutil.copytree(viewer, destination, ignore=shutil.ignore_patterns(
         ".git", ".godot", "build", "__pycache__", "*.pyc", "*.import",
-        "native_payload.zip", "native_payload_manifest.json"))
+        "story_player", "native_payload.zip", "native_payload_manifest.json"))
     copied = 0
     shared = 0
     # Keep viewer configuration/native descriptors and merge story data only.
