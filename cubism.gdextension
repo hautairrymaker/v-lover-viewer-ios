@@ -7,4 +7,6 @@ compatibility_minimum = "4.3"
 
 ios.release.arm64 = "addons/gd_cubism/bin/libgd_cubism.ios.release.arm64.dylib"
 macos.release.arm64 = "addons/gd_cubism/bin/libgd_cubism.macos.release.framework"
+macos.debug.arm64 = "addons/gd_cubism/bin/libgd_cubism.macos.release.framework"
+macos.editor.arm64 = "addons/gd_cubism/bin/libgd_cubism.macos.release.framework"
 windows.release.x86_64 = "addons/gd_cubism/bin/libgd_cubism.windows.release.x86_64.dll"
