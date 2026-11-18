@@ -1,0 +1,213 @@
+name: Build Story Only iOS IPA
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  GODOT_VERSION: "4.4.1"
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 120
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 拉取私有素材仓库
+        env:
+          TOKEN: ${{ secrets.ASSETS_TOKEN }}
+          REPO: ${{ vars.ASSETS_REPO }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TOKEN:-}" ] || [ -z "${REPO:-}" ]; then
+            echo "::error::缺少 ASSETS_TOKEN secret 或 ASSETS_REPO 仓库变量（格式 owner/repo）"
+            exit 1
+          fi
+          git clone --depth 1 --filter=blob:none --sparse "https://x-access-token:${TOKEN}@github.com/${REPO}.git" "$RUNNER_TEMP/assets"
+          git -C "$RUNNER_TEMP/assets" sparse-checkout set story_project vendor
+          # 私有仓库的 project/ 目录直接铺到工程根
+          cp -R "$RUNNER_TEMP/assets/story_project/." .
+          # Only discard disposable runner copies after copying into the build workspace.
+          rm -rf "$RUNNER_TEMP/assets/story_project" "$RUNNER_TEMP/assets/.git"
+          echo "素材检查："
+          df -h .
+          du -sh assets Portraits 2>/dev/null || true
+          test -f data/scenario_full.json || { echo "::error::data/scenario_full.json 缺失"; exit 1; }
+
+      - name: 安装 Godot 与 iOS 导出模板
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/godot.zip "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_macos.universal.zip"
+          unzip -q /tmp/godot.zip -d "$RUNNER_TEMP/godot"
+          echo "GODOT=$RUNNER_TEMP/godot/Godot.app/Contents/MacOS/Godot" >> "$GITHUB_ENV"
+          curl -fsSL -o /tmp/templates.tpz "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_export_templates.tpz"
+          unzip -q /tmp/templates.tpz -d "$RUNNER_TEMP/tpl"
+          mkdir -p "$HOME/Library/Application Support/Godot/export_templates"
+          rm -rf "$HOME/Library/Application Support/Godot/export_templates/${GODOT_VERSION}.stable"
+          mv "$RUNNER_TEMP/tpl/templates" "$HOME/Library/Application Support/Godot/export_templates/${GODOT_VERSION}.stable"
+          ls "$HOME/Library/Application Support/Godot/export_templates/${GODOT_VERSION}.stable" | grep -i ios | head
+
+      - name: 保留原生模型原文件
+        run: python3 scripts/prepare_story_payload.py
+
+      - name: 验证包完整性检查器
+        run: python3 scripts/test_story_pack.py
+
+      - name: 安装 scons
+        run: |
+          set -euo pipefail
+          brew install scons
+          scons --version | head -n 3
+
+      - name: 编译 spine-godot (iOS + macOS arm64，必须成功)
+        id: spine
+        run: |
+          set -euo pipefail
+          bash scripts/build_spine_ios.sh 2>&1 | tee "$RUNNER_TEMP/spine-build.log"
+
+      - name: 编译 gd_cubism (iOS arm64)
+        env:
+          CUBISM_SDK_DIR: ${{ runner.temp }}/assets/vendor/CubismSdkForNative-5-r.1
+        run: bash scripts/build_cubism_ios.sh
+
+      - name: 导入工程资源
+        run: |
+          set -euo pipefail
+          "$GODOT" --headless --path . --import 2>&1 | tee /tmp/import.log | tail -n 80
+          test -d .godot || { echo "::error::导入失败，没有生成 .godot"; exit 1; }
+          echo "== 扩展加载情况 =="
+          cat .godot/extension_list.cfg 2>/dev/null || echo "(没有 extension_list.cfg)"
+          if ! grep -qi 'cubism' .godot/extension_list.cfg 2>/dev/null; then
+            echo "::error::编辑器未加载到 gd_cubism 扩展，导出必然缺 Live2D"
+            grep -iE 'GDExtension|gdextension|dlopen|Failed loading' /tmp/import.log | head -n 15
+            exit 1
+          fi
+
+      - name: 验证原生类真实注册
+        run: '"$GODOT" --headless --path . --script res://scripts/check_native_extensions.gd'
+
+      - name: 导出 Xcode 工程
+        run: |
+          set -euo pipefail
+          mkdir -p build/ios
+          "$GODOT" --headless --path . --export-release "iOS" "build/ios/VLoverStory.ipa" 2>&1 | tee /tmp/export.log | tail -n 150
+          echo "== build/ios 内容 =="
+          ls -la build/ios
+          if grep -q "SCRIPT ERROR" /tmp/export.log; then
+            echo "::error::导出时脚本解析失败，打出来的包运行期会缺功能"
+            grep "SCRIPT ERROR" /tmp/export.log | head -n 20
+            exit 1
+          fi
+          PCK="$(find build/ios -name '*.pck' -print -quit)"
+          test -n "$PCK" || { echo "::error::导出没有PCK"; exit 1; }
+          python3 scripts/verify_story_pack.py "$PCK" .
+          python3 scripts/prepare_story_payload.py --verify-pack "$PCK"
+          GENERATED="$(find build/ios -maxdepth 2 -name '*.xcodeproj' | head -n1)"
+          if [ -z "$GENERATED" ]; then
+            echo "::error::Godot 没有生成 .xcodeproj"
+            exit 1
+          fi
+          echo "生成: $GENERATED"
+
+      - name: 校验原生库是否真的进了工程
+        run: |
+          set -euo pipefail
+          ls -la addons/gd_cubism/bin/
+          if ! ls addons/gd_cubism/bin/*.dylib >/dev/null 2>&1; then
+            echo "::error::gd_cubism 的 iOS dylib 不存在，导出必然是空壳"
+            exit 1
+          fi
+          PROJ="$(find build/ios -maxdepth 2 -name '*.xcodeproj' | head -n1)"
+          test -n "$PROJ" || { echo "::error::没有生成 .xcodeproj"; exit 1; }
+          echo "PROJ=$PROJ"
+          echo "PROJ=$PROJ" >> "$GITHUB_ENV"
+          echo "APP_NAME=$(basename "$PROJ" .xcodeproj)" >> "$GITHUB_ENV"
+          if grep -q 'libgd_cubism' "$PROJ/project.pbxproj"; then
+            echo "pbxproj 里已引用 libgd_cubism"
+          else
+            echo "::warning::pbxproj 里没有 libgd_cubism 引用，运行期可能加载不到扩展"
+          fi
+
+      - name: xcodebuild 无签名构建
+        run: |
+          set -euo pipefail
+          echo "== 可用 scheme =="
+          xcodebuild -list -project "$PROJ" 2>&1 | tail -n 30
+          xcodebuild -project "$PROJ" -scheme "$APP_NAME" -configuration Release -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build/derived \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            DEVELOPMENT_TEAM="" PROVISIONING_PROFILE_SPECIFIER="" \
+            build 2>&1 | tail -n 150
+
+      - name: 校验 .app 里真的有扩展
+        run: |
+          set -euo pipefail
+          APP="$(find build/derived -maxdepth 4 -name "*.app" -type d | head -n1)"
+          test -n "$APP" || { echo "::error::没有产出 .app"; exit 1; }
+          echo "APP=$APP"
+          ls -la "$APP" | head -n 40
+          find "$APP" -name 'libgd_cubism*' -o -name '*.dylib' | tee /tmp/found_libs.txt
+          if ! grep -q 'libgd_cubism' /tmp/found_libs.txt; then
+            echo "::error::.app 内没有 libgd_cubism，Live2D 在真机上必然是空的"
+            exit 1
+          fi
+          SPINE="$APP/Frameworks/libspine_godot.ios.template_release.framework/libspine_godot.ios.template_release"
+          test -f "$SPINE" || { echo "::error::IPA 缺少 Spine 扩展，拒绝发布"; exit 1; }
+          lipo "$SPINE" -verify_arch arm64
+          nm -gU "$SPINE" > /tmp/spine-app-symbols.txt
+          grep -q '_spine_godot_library_init' /tmp/spine-app-symbols.txt
+          find "$APP" -name '*.pck' | head -n1 | grep -q . || echo "::warning::.app 里没找到 pck"
+
+      - name: 打包未签名 IPA
+        run: |
+          set -euo pipefail
+          APP="$(find build/derived -maxdepth 4 -name "*.app" -type d | head -n1)"
+          rm -rf build/ipa && mkdir -p build/ipa/Payload
+          cp -R "$APP" build/ipa/Payload/
+          rm -rf "build/ipa/Payload/$(basename "$APP")/_CodeSignature"
+          cd build/ipa && zip -qry "$GITHUB_WORKSPACE/V-Lover-Story-unsigned.ipa" Payload
+          cd - >/dev/null
+          ls -lh V-Lover-Story-unsigned.ipa
+          df -h .
+
+      - name: 发布到 Release（附件不占 Actions 存储额度）
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="story-build-${GITHUB_RUN_NUMBER}"
+          SIZE="$(stat -f%z V-Lover-Story-unsigned.ipa)"
+          if [ "$SIZE" -ge 2147483648 ]; then
+            split -b 1900000000 -a 3 V-Lover-Story-unsigned.ipa V-Lover-Story-unsigned.ipa.part-
+            shasum -a 256 V-Lover-Story-unsigned.ipa > IPA_SHA256.txt
+            printf '%s\n' \
+              '分卷仅用于下载，不能直接安装。下载全部part文件后合并成IPA再签名安装。' \
+              'macOS: cat V-Lover-Story-unsigned.ipa.part-* > V-Lover-Story-unsigned.ipa' \
+              'Windows cmd: copy /b V-Lover-Story-unsigned.ipa.part-* V-Lover-Story-unsigned.ipa' \
+              '合并后核对IPA_SHA256.txt。' > IPA_DOWNLOAD.txt
+            set -- V-Lover-Story-unsigned.ipa.part-* IPA_SHA256.txt IPA_DOWNLOAD.txt
+          else
+            set -- V-Lover-Story-unsigned.ipa
+          fi
+          gh release create "$TAG" "$@" \
+            --title "iOS 未签名包 $TAG" \
+            --notes "Godot ${GODOT_VERSION} 构建，Spine 编译结果: ${{ steps.spine.outcome }}。未签名，需自签后安装。"
+          echo "下载页面: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG}"
+
+      - name: 汇总
+        if: always()
+        run: |
+          {
+            echo "### 构建结果"
+            echo "- Godot: ${GODOT_VERSION}"
+            echo "- Spine 编译: ${{ steps.spine.outcome }}"
+            echo "- 产物: V-Lover-Story-unsigned.ipa"
+          } >> "$GITHUB_STEP_SUMMARY"
