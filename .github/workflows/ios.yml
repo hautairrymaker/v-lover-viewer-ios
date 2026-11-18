@@ -30,12 +30,19 @@ jobs:
             echo "::error::缺少 ASSETS_TOKEN secret 或 ASSETS_REPO 仓库变量（格式 owner/repo）"
             exit 1
           fi
-          git clone --depth 1 "https://x-access-token:${TOKEN}@github.com/${REPO}.git" "$RUNNER_TEMP/assets"
+          git clone --depth 1 --filter=blob:none --sparse "https://x-access-token:${TOKEN}@github.com/${REPO}.git" "$RUNNER_TEMP/assets"
+          git -C "$RUNNER_TEMP/assets" sparse-checkout set project vendor
           # 私有仓库的 project/ 目录直接铺到工程根
           cp -R "$RUNNER_TEMP/assets/project/." .
+          rm -rf "$RUNNER_TEMP/assets/project" "$RUNNER_TEMP/assets/.git"
           echo "素材检查："
           du -sh assets Portraits 2>/dev/null || true
           test -f catalog.json || { echo "::error::catalog.json 缺失"; exit 1; }
+
+      - name: 验证语音字幕索引
+        run: |
+          python3 scripts/test_voice_subtitles.py
+          python3 scripts/check_subtitle_index.py
 
       - name: 准备原生加载器原文件包
         run: python3 scripts/prepare_native_payload.py

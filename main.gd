@@ -24,6 +24,8 @@ var voice_cues: Array = []
 var voice_choice: OptionButton
 var voice_controls: HBoxContainer
 var voice_player: AudioStreamPlayer
+var voice_subtitles: Dictionary = {}
+var voice_subtitle
 var parameter_scroll: ScrollContainer
 var parameters: VBoxContainer
 var pause_toggle: CheckButton
@@ -74,7 +76,12 @@ func _build() -> void:
 		cg_catalog = JSON.parse_string(FileAccess.get_file_as_string("res://cg_catalog.json")).groups
 	if FileAccess.file_exists("res://cg_voices.json"):
 		voice_catalog = JSON.parse_string(FileAccess.get_file_as_string("res://cg_voices.json")).cues
+	if FileAccess.file_exists("res://cg_subtitles.json"):
+		var subtitle_data = JSON.parse_string(FileAccess.get_file_as_string("res://cg_subtitles.json"))
+		if subtitle_data is Dictionary:
+			voice_subtitles = subtitle_data.get("subtitles", {})
 	voice_player = AudioStreamPlayer.new()
+	voice_player.finished.connect(_clear_voice_subtitle)
 	app_root.add_child(voice_player)
 	ui = Control.new()
 	ui.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -167,7 +174,8 @@ func _build() -> void:
 	voice_controls.add_child(voice_play)
 	var voice_stop := Button.new()
 	voice_stop.text = "停止语音"
-	voice_stop.pressed.connect(func(): voice_player.stop())
+	voice_stop.pressed.connect(_stop_voice)
+	voice_choice.item_selected.connect(func(_index): _stop_voice())
 	voice_controls.add_child(voice_stop)
 	pause_toggle.toggled.connect(func(value): voice_player.stream_paused = value)
 	caption("表情", sidebar)
@@ -182,6 +190,13 @@ func _build() -> void:
 	parameters.custom_minimum_size.x = 232
 	parameters.add_theme_constant_override("separation", 8)
 	scroll.add_child(parameters)
+	voice_subtitle = preload("res://voice_subtitle.gd").new()
+	ui.add_child(voice_subtitle)
+	voice_subtitle.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_RIGHT)
+	voice_subtitle.offset_left = -436
+	voice_subtitle.offset_top = -176
+	voice_subtitle.offset_right = -16
+	voice_subtitle.offset_bottom = -16
 	mode.item_selected.connect(func(_index): _load_selection())
 	actor.item_selected.connect(func(_index): _load_selection())
 	animation.item_selected.connect(_play_animation)
@@ -203,7 +218,7 @@ func _build() -> void:
 
 func _load_selection() -> void:
 	rebuilding = true
-	voice_player.stop()
+	_stop_voice()
 	loaded = false
 	models.clear()
 	pictures.clear()
@@ -423,7 +438,7 @@ func _spine_paths(entry: Dictionary) -> Dictionary:
 func _load_cg_group(index: int) -> void:
 	if index < 0 or index >= cg_catalog.size():
 		return
-	voice_player.stop()
+	_stop_voice()
 	var entry: Dictionary = cg_catalog[index]
 	animation.clear()
 	for clip in entry.animations:
@@ -439,7 +454,7 @@ func _load_cg_group(index: int) -> void:
 func _play_cg_clip(index: int) -> void:
 	if spine == null or index < 0:
 		return
-	voice_player.stop()
+	_stop_voice()
 	var clip: Dictionary = cg_catalog[cg_group.selected].animations[index]
 	var state := _spine_state()
 	var skel := _spine_skeleton()
@@ -478,12 +493,25 @@ func _play_voice() -> void:
 	if voice_choice.selected < 0 or voice_choice.selected >= voice_cues.size():
 		return
 	var cue: Dictionary = voice_cues[voice_choice.selected]
-	voice_player.stop()
+	_stop_voice()
 	voice_player.stream = _load_voice_stream(str(cue.path))
 	voice_player.pitch_scale = 1.0
 	if voice_player.stream != null:
 		voice_player.play()
 		voice_player.stream_paused = pause_toggle.button_pressed
+		var subtitle := str(voice_subtitles.get(str(cue.op_index), ""))
+		voice_subtitle.show_caption(subtitle.replace("<param=player_name>", "我"))
+
+
+func _clear_voice_subtitle() -> void:
+	if voice_subtitle != null:
+		voice_subtitle.clear_caption()
+
+
+func _stop_voice() -> void:
+	if voice_player != null:
+		voice_player.stop()
+	_clear_voice_subtitle()
 
 
 func _verify_voices() -> void:
@@ -513,7 +541,7 @@ func _verify_voices() -> void:
 				checks.append({"check": "pause", "ok": voice_player.stream_paused})
 				pause_toggle.button_pressed = false
 				checks.append({"check": "resume", "ok": not voice_player.stream_paused})
-				voice_player.stop()
+				_stop_voice()
 				checks.append({"check": "stop", "ok": not voice_player.playing})
 	checks.append({"check": "all_cues_reachable", "ok": count == voice_catalog.size(), "count": count})
 	var passed := checks.filter(func(item): return item.ok).size()
