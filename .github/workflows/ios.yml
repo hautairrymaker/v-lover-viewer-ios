@@ -17,7 +17,7 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 120
     permissions:
-      contents: read
+      contents: write
       actions: write
     steps:
       - uses: actions/checkout@v4
@@ -78,9 +78,14 @@ jobs:
         run: |
           set +e
           mkdir -p build/ios
-          "$GODOT" --headless --path . --export-release "iOS" "build/ios/VLoverViewer.ipa" 2>&1 | tail -n 150
+          "$GODOT" --headless --path . --export-release "iOS" "build/ios/VLoverViewer.ipa" 2>&1 | tee /tmp/export.log | tail -n 150
           echo "== build/ios 内容 =="
           ls -la build/ios
+          if grep -q "SCRIPT ERROR" /tmp/export.log; then
+            echo "::error::导出时脚本解析失败，打出来的包运行期会缺功能"
+            grep "SCRIPT ERROR" /tmp/export.log | head -n 20
+            exit 1
+          fi
           GENERATED="$(find build/ios -maxdepth 2 -name '*.xcodeproj' | head -n1)"
           if [ -z "$GENERATED" ]; then
             echo "::error::Godot 没有生成 .xcodeproj"
@@ -144,26 +149,16 @@ jobs:
           cd - >/dev/null
           ls -lh V-Lover-Viewer-unsigned.ipa
 
-      - name: 清理旧产物（免费额度仅 500MB，单包 250MB）
+      - name: 发布到 Release（附件不占 Actions 存储额度）
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RUN_ID: ${{ github.run_id }}
         run: |
           set -euo pipefail
-          gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts?per_page=100" \
-            --jq ".artifacts[] | select(.workflow_run.id != ${RUN_ID}) | .id" > /tmp/old_artifacts.txt || true
-          while read -r ART_ID; do
-            [ -z "$ART_ID" ] && continue
-            echo "删除旧产物 $ART_ID"
-            gh api -X DELETE "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ART_ID}" || true
-          done < /tmp/old_artifacts.txt
-          echo "剩余空间已释放"
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: V-Lover-Viewer-unsigned-ipa
-          path: V-Lover-Viewer-unsigned.ipa
-          retention-days: 30
+          TAG="build-${GITHUB_RUN_NUMBER}"
+          gh release create "$TAG" V-Lover-Viewer-unsigned.ipa \
+            --title "iOS 未签名包 $TAG" \
+            --notes "Godot ${GODOT_VERSION} 构建，Spine 编译结果: ${{ steps.spine.outcome }}。未签名，需自签后安装。"
+          echo "下载地址: https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/V-Lover-Viewer-unsigned.ipa"
 
       - name: 汇总
         if: always()
