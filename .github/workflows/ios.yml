@@ -1,0 +1,144 @@
+name: Build iOS IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  GODOT_VERSION: "4.4.1"
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 拉取私有素材仓库
+        env:
+          TOKEN: ${{ secrets.ASSETS_TOKEN }}
+          REPO: ${{ vars.ASSETS_REPO }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TOKEN:-}" ] || [ -z "${REPO:-}" ]; then
+            echo "::error::缺少 ASSETS_TOKEN secret 或 ASSETS_REPO 仓库变量（格式 owner/repo）"
+            exit 1
+          fi
+          git clone --depth 1 "https://x-access-token:${TOKEN}@github.com/${REPO}.git" "$RUNNER_TEMP/assets"
+          # 私有仓库的 project/ 目录直接铺到工程根
+          cp -R "$RUNNER_TEMP/assets/project/." .
+          echo "素材检查："
+          du -sh assets Portraits 2>/dev/null || true
+          test -f catalog.json || { echo "::error::catalog.json 缺失"; exit 1; }
+
+      - name: 安装 Godot 与 iOS 导出模板
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/godot.zip "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_macos.universal.zip"
+          unzip -q /tmp/godot.zip -d "$RUNNER_TEMP/godot"
+          echo "GODOT=$RUNNER_TEMP/godot/Godot.app/Contents/MacOS/Godot" >> "$GITHUB_ENV"
+          curl -fsSL -o /tmp/templates.tpz "https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-stable/Godot_v${GODOT_VERSION}-stable_export_templates.tpz"
+          unzip -q /tmp/templates.tpz -d "$RUNNER_TEMP/tpl"
+          mkdir -p "$HOME/Library/Application Support/Godot/export_templates"
+          rm -rf "$HOME/Library/Application Support/Godot/export_templates/${GODOT_VERSION}.stable"
+          mv "$RUNNER_TEMP/tpl/templates" "$HOME/Library/Application Support/Godot/export_templates/${GODOT_VERSION}.stable"
+          ls "$HOME/Library/Application Support/Godot/export_templates/${GODOT_VERSION}.stable" | grep -i ios | head
+
+      - name: 编译 gd_cubism (iOS arm64)
+        env:
+          CUBISM_SDK_DIR: ${{ runner.temp }}/assets/vendor/CubismSdkForNative-5-r.1
+        run: bash scripts/build_cubism_ios.sh
+
+      - name: 尝试编译 spine-godot (iOS arm64)
+        id: spine
+        continue-on-error: true
+        run: bash scripts/build_spine_ios.sh
+
+      - name: 导入工程资源
+        run: |
+          set -uo pipefail
+          "$GODOT" --headless --path . --import 2>&1 | tail -n 80
+          test -d .godot || { echo "::error::导入失败，没有生成 .godot"; exit 1; }
+
+      - name: 导出 Xcode 工程
+        run: |
+          set -uo pipefail
+          mkdir -p build/ios
+          "$GODOT" --headless --path . --export-release "iOS" "build/ios/" 2>&1 | tail -n 120
+          echo "== build/ios 内容 =="
+          ls -la build/ios
+          find build/ios -maxdepth 2 -name '*.xcodeproj' | head
+
+      - name: 校验原生库是否真的进了工程
+        run: |
+          set -euo pipefail
+          ls -la addons/gd_cubism/bin/
+          if ! ls addons/gd_cubism/bin/*.dylib >/dev/null 2>&1; then
+            echo "::error::gd_cubism 的 iOS dylib 不存在，导出必然是空壳"
+            exit 1
+          fi
+          PROJ="$(find build/ios -maxdepth 2 -name '*.xcodeproj' | head -n1)"
+          test -n "$PROJ" || { echo "::error::没有生成 .xcodeproj"; exit 1; }
+          echo "PROJ=$PROJ"
+          echo "PROJ=$PROJ" >> "$GITHUB_ENV"
+          echo "APP_NAME=$(basename "$PROJ" .xcodeproj)" >> "$GITHUB_ENV"
+          if grep -q 'libgd_cubism' "$PROJ/project.pbxproj"; then
+            echo "pbxproj 里已引用 libgd_cubism"
+          else
+            echo "::warning::pbxproj 里没有 libgd_cubism 引用，运行期可能加载不到扩展"
+          fi
+
+      - name: xcodebuild 无签名构建
+        run: |
+          set -euo pipefail
+          xcodebuild -project "$PROJ" -target "$APP_NAME" -configuration Release -sdk iphoneos \
+            -derivedDataPath build/derived \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            DEVELOPMENT_TEAM="" PROVISIONING_PROFILE_SPECIFIER="" \
+            build 2>&1 | tail -n 150
+
+      - name: 校验 .app 里真的有扩展
+        run: |
+          set -euo pipefail
+          APP="$(find build/derived -maxdepth 4 -name "*.app" -type d | head -n1)"
+          test -n "$APP" || { echo "::error::没有产出 .app"; exit 1; }
+          echo "APP=$APP"
+          ls -la "$APP" | head -n 40
+          find "$APP" -name 'libgd_cubism*' -o -name '*.dylib' | tee /tmp/found_libs.txt
+          if ! grep -q 'libgd_cubism' /tmp/found_libs.txt; then
+            echo "::error::.app 内没有 libgd_cubism，Live2D 在真机上必然是空的"
+            exit 1
+          fi
+          test -f "$APP/vlover.pck" -o -n "$(find "$APP" -name '*.pck' | head -n1)" || echo "::warning::没找到 pck"
+
+      - name: 打包未签名 IPA
+        run: |
+          set -euo pipefail
+          APP="$(find build/derived -maxdepth 4 -name "*.app" -type d | head -n1)"
+          rm -rf build/ipa && mkdir -p build/ipa/Payload
+          cp -R "$APP" build/ipa/Payload/
+          rm -rf "build/ipa/Payload/$(basename "$APP")/_CodeSignature"
+          cd build/ipa && zip -qry "$GITHUB_WORKSPACE/V-Lover-Viewer-unsigned.ipa" Payload
+          cd - >/dev/null
+          ls -lh V-Lover-Viewer-unsigned.ipa
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: V-Lover-Viewer-unsigned-ipa
+          path: V-Lover-Viewer-unsigned.ipa
+          retention-days: 30
+
+      - name: 汇总
+        if: always()
+        run: |
+          {
+            echo "### 构建结果"
+            echo "- Godot: ${GODOT_VERSION}"
+            echo "- Spine 编译: ${{ steps.spine.outcome }}"
+            echo "- 产物: V-Lover-Viewer-unsigned.ipa"
+          } >> "$GITHUB_STEP_SUMMARY"

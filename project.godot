@@ -1,0 +1,26 @@
+config_version=5
+
+[application]
+
+config/name="V-Lover Character Studio"
+run/main_scene="res://main.tscn"
+config/features=PackedStringArray("4.4", "GL Compatibility")
+config/icon="res://icon.png"
+
+[display]
+
+window/size/viewport_width=1320
+window/size/viewport_height=800
+window/stretch/mode="canvas_items"
+window/stretch/aspect="keep"
+window/handheld/orientation=0
+
+[rendering]
+
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"
+textures/vram_compression/import_etc2_astc=true
+
+[input_devices]
+
+pointing/emulate_mouse_from_touch=true

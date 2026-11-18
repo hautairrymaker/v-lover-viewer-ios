@@ -1,0 +1,22 @@
+# Godot
+.godot/
+build/
+*.import
+
+# 原生二进制不进源码库，由 CI 编译后注入
+addons/gd_cubism/bin/*.dll
+addons/gd_cubism/bin/*.dylib
+addons/gd_cubism/bin/*.a
+addons/spine_godot/bin/
+
+# 版权素材永远不进这个仓库
+assets/
+Portraits/
+catalog.json
+cg_catalog.json
+cg_manifest.json
+cg_voices.json
+
+# 本地环境
+.DS_Store
+Thumbs.db

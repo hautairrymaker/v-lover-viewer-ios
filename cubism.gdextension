@@ -1,0 +1,9 @@
+[configuration]
+
+entry_symbol = "gd_cubism_library_init"
+compatibility_minimum = "4.3"
+
+[libraries]
+
+ios.release.arm64 = "addons/gd_cubism/bin/libgd_cubism.ios.release.arm64.dylib"
+windows.release.x86_64 = "addons/gd_cubism/bin/libgd_cubism.windows.release.x86_64.dll"
