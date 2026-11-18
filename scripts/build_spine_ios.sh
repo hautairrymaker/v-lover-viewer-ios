@@ -23,19 +23,13 @@ echo "spine-godot: $GD_DIR"
 ls -la "$GD_DIR"
 cd "$GD_DIR"
 
-# spine-godot 内部的 godot-cpp 是嵌套子模块，--recurse-submodules 不会递归到这一层，需显式初始化
-git submodule update --init --recursive
-
-# 把 godot-cpp 切到 4.4.1，匹配 Godot 4.4.1 模板（否则 ABI 不匹配，真机加载会失败）
-if [ -d godot-cpp ]; then
-  cd godot-cpp
-  git fetch --depth 1 origin "refs/tags/godot-4.4.1-stable:refs/tags/godot-4.4.1-stable" 2>/dev/null \
-    || git fetch --depth 1 origin godot-4.4.1-stable 2>/dev/null || true
-  git checkout godot-4.4.1-stable 2>/dev/null || echo "::warning::godot-cpp 切 4.4.1 失败，沿用当前版本"
-  cd ..
-else
-  echo "::warning::spine-godot 下没有 godot-cpp 目录，检查子模块布局"
+# spine-godot 4.2 上游的 godot-cpp 子模块是空的（submodule update 拉不到任何东西），
+# 这里直接显式克隆，并锁定到 Godot 4.4.1 对应的分支，避免 ABI 不匹配。
+if [ ! -d godot-cpp ]; then
+  git clone --depth 1 --branch godot-4.4.1-stable \
+    https://github.com/godotengine/godot-cpp.git godot-cpp
 fi
+echo "godot-cpp: $(git -C godot-cpp describe --tags --always 2>/dev/null || echo unknown)"
 
 if [ -f SConstruct ]; then
   scons platform=ios arch=arm64 target=template_release -j"$JOBS"
