@@ -45,7 +45,7 @@ var app_root: Window
 
 func _ready() -> void:
 	app_root = get_tree().root
-	_build()
+	_build.call_deferred()
 
 
 func caption(value: String, parent: Node) -> Label:
