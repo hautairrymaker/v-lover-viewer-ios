@@ -49,6 +49,12 @@ jobs:
           mv "$RUNNER_TEMP/tpl/templates" "$HOME/Library/Application Support/Godot/export_templates/${GODOT_VERSION}.stable"
           ls "$HOME/Library/Application Support/Godot/export_templates/${GODOT_VERSION}.stable" | grep -i ios | head
 
+      - name: 安装 scons
+        run: |
+          set -euo pipefail
+          brew install scons
+          scons --version | head -n 3
+
       - name: 编译 gd_cubism (iOS arm64)
         env:
           CUBISM_SDK_DIR: ${{ runner.temp }}/assets/vendor/CubismSdkForNative-5-r.1
