@@ -220,7 +220,10 @@ func _show_error(message: String) -> void:
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_APPLICATION_PAUSED: _save_reading()
-	if what == NOTIFICATION_WM_CLOSE_REQUEST: _shutdown.call_deferred()
+	if what == NOTIFICATION_WM_CLOSE_REQUEST: _on_window_close_requested.call_deferred()
+
+func _on_window_close_requested() -> void:
+	await _shutdown()
 
 func _shutdown() -> void:
 	if shutting_down: return

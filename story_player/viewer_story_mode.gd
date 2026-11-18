@@ -6,6 +6,21 @@ var chapter_list: ItemList
 var chapter_title: Label
 var play_button: Button
 var resume_button: Button
+var previous_auto_accept_quit := true
+var closing_application := false
+
+func _ready() -> void:
+	previous_auto_accept_quit = get_tree().auto_accept_quit
+	super._ready()
+
+func _exit_tree() -> void:
+	get_tree().auto_accept_quit = previous_auto_accept_quit
+
+func _on_window_close_requested() -> void:
+	if closing_application: return
+	closing_application = true
+	await deactivate()
+	get_tree().quit()
 
 func _show_main_menu() -> void:
 	# Only original public gallery entries are chapter entry points.

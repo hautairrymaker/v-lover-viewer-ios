@@ -73,6 +73,7 @@ func run() -> void:
 	await viewer._load_selection()
 	await process_frame
 	check(viewer.story_host == null and viewer.story_container == null, "story_viewport_released")
+	check(auto_accept_quit, "window_close_restored_after_story")
 	check(viewer.stage.visible and viewer.viewer_sidebar.visible, "viewer_restored")
 	check(viewer.pictures.size() > 0, "portrait_mode_preserved")
 	viewer.mode.select(4)
