@@ -147,7 +147,7 @@ jobs:
           fi
           SPINE="$APP/Frameworks/libspine_godot.ios.template_release.framework/libspine_godot.ios.template_release"
           test -f "$SPINE" || { echo "::error::IPA 缺少 Spine 扩展，拒绝发布"; exit 1; }
-          lipo -verify_arch arm64 "$SPINE"
+          lipo "$SPINE" -verify_arch arm64
           nm -gU "$SPINE" > /tmp/spine-app-symbols.txt
           grep -q '_spine_godot_library_init' /tmp/spine-app-symbols.txt
           find "$APP" -name '*.pck' | head -n1 | grep -q . || echo "::warning::.app 里没找到 pck"

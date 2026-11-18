@@ -51,7 +51,7 @@ publish_framework() {
   local name="libspine_godot.${platform}.template_release"
   local artifact="bin/${platform}/${name}.framework"
   test -f "$artifact/$name"
-  lipo -verify_arch arm64 "$artifact/$name"
+  lipo "$artifact/$name" -verify_arch arm64
   nm -gU "$artifact/$name" > "$WORK/${platform}-symbols.txt"
   grep -q '_spine_godot_library_init' "$WORK/${platform}-symbols.txt"
   plutil -lint "$(find "$artifact" -name Info.plist -print -quit)"
