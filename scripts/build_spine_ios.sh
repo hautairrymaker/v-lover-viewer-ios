@@ -33,6 +33,7 @@ git -C godot-cpp fetch --depth 1 origin "$GODOT_CPP_REF"
 git -C godot-cpp switch --detach FETCH_HEAD
 test "$(git -C godot-cpp rev-parse HEAD)" = "$GODOT_CPP_REF"
 python3 "$PROJECT_DIR/scripts/prepare_spine_runtime.py" "$WORK"
+python3 "$PROJECT_DIR/scripts/patch_spine_atlas.py" "$WORK"
 echo "godot-cpp: $(git -C godot-cpp describe --tags --always 2>/dev/null || echo unknown)"
 
 if [ -f SConstruct ]; then
