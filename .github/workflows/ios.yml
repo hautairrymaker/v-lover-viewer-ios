@@ -73,12 +73,17 @@ jobs:
 
       - name: 导出 Xcode 工程
         run: |
-          set -uo pipefail
+          set +e
           mkdir -p build/ios
-          "$GODOT" --headless --path . --export-release "iOS" "build/ios/" 2>&1 | tail -n 120
+          "$GODOT" --headless --path . --export-release "iOS" "build/ios/" 2>&1 | tail -n 150
           echo "== build/ios 内容 =="
           ls -la build/ios
-          find build/ios -maxdepth 2 -name '*.xcodeproj' | head
+          GENERATED="$(find build/ios -maxdepth 2 -name '*.xcodeproj' | head -n1)"
+          if [ -z "$GENERATED" ]; then
+            echo "::error::Godot 没有生成 .xcodeproj"
+            exit 1
+          fi
+          echo "生成: $GENERATED"
 
       - name: 校验原生库是否真的进了工程
         run: |
