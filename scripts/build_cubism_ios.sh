@@ -47,9 +47,22 @@ publish_lib ios libgd_cubism.ios.release.arm64.dylib
 
 # 编辑器宿主是 macOS，必须也编一个 macOS 库，否则导出时 GDCubismUserModel 等类型无法注册，
 # main.gd 解析失败，打出来的包在真机上 Live2D 是空的。
+# 注意：macOS 平台的产物是 .framework，不是 .dylib。
 echo "== 编译 gd_cubism (macos, arm64) 供导出时加载 =="
 scons platform=macos arch=arm64 target=template_release -j"$JOBS"
-publish_lib macos libgd_cubism.macos.release.arm64.dylib
+
+FW="$(find demo/addons/gd_cubism/bin -maxdepth 1 -name '*macos*.framework' | head -n 1)"
+if [ -z "$FW" ]; then
+  echo "::error::没有找到 macos framework"
+  ls -la demo/addons/gd_cubism/bin || true
+  exit 1
+fi
+FW_NAME="$(basename "$FW")"
+rm -rf "$PROJECT_DIR/addons/gd_cubism/bin/$FW_NAME"
+cp -R "$FW" "$PROJECT_DIR/addons/gd_cubism/bin/"
+echo "$FW_NAME <- $FW"
+test -f "$PROJECT_DIR/addons/gd_cubism/bin/$FW_NAME/${FW_NAME%.framework}" \
+  || { echo "::error::framework 内没有主二进制"; find "$PROJECT_DIR/addons/gd_cubism/bin/$FW_NAME"; exit 1; }
 
 echo "== 最终产物 =="
 ls -la "$PROJECT_DIR/addons/gd_cubism/bin/"
