@@ -1,0 +1,38 @@
+name: Verify Released Viewer Story IPA
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download the integrated release without rebuilding
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/viewer-story-check"
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/viewer-story-build-20" \
+            > "$RUNNER_TEMP/viewer-story-check/release.json"
+          gh release download viewer-story-build-20 --repo "$GITHUB_REPOSITORY" \
+            --pattern V-Lover-Viewer-Story-unsigned.ipa --dir "$RUNNER_TEMP/viewer-story-check"
+      - name: Inspect the actual IPA native binaries and story resources
+        run: |
+          set -euo pipefail
+          python3 scripts/verify_viewer_story_ipa.py \
+            --ipa "$RUNNER_TEMP/viewer-story-check/V-Lover-Viewer-Story-unsigned.ipa" \
+            --metadata "$RUNNER_TEMP/viewer-story-check/release.json" \
+            --scenario-sha256 1383e665ba2f1258b29fab49e0480a5b2efb90afc55d9f4e5627822d55990799 \
+            --output "$RUNNER_TEMP/viewer-story-check/result.json"
+          {
+            echo '### Integrated IPA structural inspection'
+            echo '```json'
+            cat "$RUNNER_TEMP/viewer-story-check/result.json"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
