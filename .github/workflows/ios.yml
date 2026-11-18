@@ -75,7 +75,7 @@ jobs:
         run: |
           set +e
           mkdir -p build/ios
-          "$GODOT" --headless --path . --export-release "iOS" "build/ios/" 2>&1 | tail -n 150
+          "$GODOT" --headless --path . --export-release "iOS" "build/ios/VLoverViewer.ipa" 2>&1 | tail -n 150
           echo "== build/ios 内容 =="
           ls -la build/ios
           GENERATED="$(find build/ios -maxdepth 2 -name '*.xcodeproj' | head -n1)"
@@ -107,7 +107,10 @@ jobs:
       - name: xcodebuild 无签名构建
         run: |
           set -euo pipefail
-          xcodebuild -project "$PROJ" -target "$APP_NAME" -configuration Release -sdk iphoneos \
+          echo "== 可用 scheme =="
+          xcodebuild -list -project "$PROJ" 2>&1 | tail -n 30
+          xcodebuild -project "$PROJ" -scheme "$APP_NAME" -configuration Release -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
             -derivedDataPath build/derived \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
             DEVELOPMENT_TEAM="" PROVISIONING_PROFILE_SPECIFIER="" \
@@ -125,7 +128,7 @@ jobs:
             echo "::error::.app 内没有 libgd_cubism，Live2D 在真机上必然是空的"
             exit 1
           fi
-          test -f "$APP/vlover.pck" -o -n "$(find "$APP" -name '*.pck' | head -n1)" || echo "::warning::没找到 pck"
+          find "$APP" -name '*.pck' | head -n1 | grep -q . || echo "::warning::.app 里没找到 pck"
 
       - name: 打包未签名 IPA
         run: |
