@@ -41,6 +41,9 @@ var verified := false
 var loaded := false
 var rebuilding := false
 var app_root: Window
+var native_payload = preload("res://native_payload.gd").new()
+var native_payload_ready := false
+var native_error: Label
 
 
 func _ready() -> void:
@@ -218,13 +221,25 @@ func _load_selection() -> void:
 	voice_controls.visible = mode.selected == 3
 	parameter_scroll.custom_minimum_size.y = 380 if mode.selected == 3 else 520
 	actor.disabled = mode.selected == 3
+	if native_error != null:
+		native_error.hide()
+	if OS.has_feature("mobile") and mode.selected != 2 and not native_payload_ready:
+		if not native_payload.prepare():
+			_report_native_error(native_payload.error)
+			rebuilding = false
+			return
+		native_payload_ready = true
 	var actors: Array = ACTORS if actor.selected == 0 else [ACTORS[actor.selected - 1]]
 	if mode.selected == 0:
+		if not ClassDB.class_exists("GDCubismUserModel"):
+			_report_native_error("Live2D native extension is not registered on this device")
+			rebuilding = false
+			return
 		for identity in actors:
 			var model = ClassDB.instantiate("GDCubismUserModel")
 			if model == null:
 				continue
-			model.assets = str(catalog.live2d[identity].model)
+			model.assets = _native_path(str(catalog.live2d[identity].model))
 			model.playback_process_mode = ClassDB.class_get_integer_constant("GDCubismUserModel", "MANUAL")
 			world.add_child(model)
 			var defaults: Dictionary = JSON.parse_string(FileAccess.get_file_as_string(catalog.live2d[identity].defaults))
@@ -233,13 +248,17 @@ func _load_selection() -> void:
 			for part in model.get_part_opacities():
 				part.value = defaults.parts.get(part.id, 1.0)
 			var info: Dictionary = model.get_canvas_info()
+			if info.is_empty() or info.size_in_pixels.x <= 0 or info.size_in_pixels.y <= 0:
+				_report_native_error("Live2D model did not initialize: " + str(identity))
+				model.queue_free()
+				continue
 			var factor := minf((stage.size.x / actors.size()) / float(info.size_in_pixels.x), 660.0 / float(info.size_in_pixels.y))
 			model.scale = Vector2.ONE * factor
 			model.position = Vector2(stage.size.x * (models.size() + 0.5) / actors.size(), stage.size.y * 0.5)
 			models.append(model)
 		if models.is_empty():
 			# 原生扩展没加载起来时不要崩，界面留着并报错
-			push_error("Live2D 模型创建失败：GDCubismUserModel 不可用（gd_cubism 扩展未加载）")
+			_report_native_error("Live2D models could not initialize")
 			rebuilding = false
 			loaded = false
 			_transform()
@@ -318,6 +337,21 @@ func _load_spine(index: int) -> void:
 func _spine_ready() -> bool:
 	return ClassDB.class_exists("SpineSprite") and ClassDB.class_exists("SpineAtlasResource")
 
+func _report_native_error(message: String) -> void:
+	push_error(message)
+	if native_error == null:
+		native_error = Label.new()
+		native_error.position = Vector2(24,24)
+		native_error.size = Vector2(950,180)
+		native_error.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		native_error.add_theme_color_override("font_color", Color("9d2020"))
+		stage.add_child(native_error)
+	native_error.text = message
+	native_error.show()
+
+func _native_path(path: String) -> String:
+	return native_payload.resolve(path) if OS.has_feature("mobile") else path
+
 
 func _spine_skeleton() -> Object:
 	return spine.call("get_skeleton") if spine != null else null
@@ -333,22 +367,22 @@ func _load_spine_entry(entry: Dictionary) -> void:
 		spine.free()
 		spine = null
 	if not _spine_ready():
-		push_error("spine_godot 扩展未加载，CG / Spine 模式不可用（Live2D 与立绘不受影响）")
+		_report_native_error("Spine native extension is not registered on this device")
 		return
 	var paths := _spine_paths(entry)
 	var atlas: Object = ClassDB.instantiate("SpineAtlasResource")
 	var skeleton: Object = ClassDB.instantiate("SpineSkeletonFileResource")
 	if atlas.call("load_from_atlas_file", paths["atlas"]) != OK:
-		push_error("Spine atlas 加载失败: %s" % paths["atlas"])
+		_report_native_error("Spine atlas could not load: %s" % paths["atlas"])
 		return
 	if skeleton.call("load_from_file", paths["skeleton"]) != OK:
-		push_error("Spine skeleton 加载失败: %s" % paths["skeleton"])
+		_report_native_error("Spine skeleton could not load: %s" % paths["skeleton"])
 		return
 	var data: Object = ClassDB.instantiate("SpineSkeletonDataResource")
 	data.set("atlas_res", atlas)
 	data.set("skeleton_file_res", skeleton)
 	if not data.call("is_skeleton_data_loaded"):
-		push_error("Spine skeleton data 未加载")
+		_report_native_error("Spine skeleton data could not initialize")
 		return
 	spine = ClassDB.instantiate("SpineSprite")
 	if entry.get("cg", false):
@@ -371,8 +405,7 @@ func _load_spine_entry(entry: Dictionary) -> void:
 	spine.position = stage.size * 0.5 - bounds.get_center() * factor
 
 
-## spine-godot 只能读真实文件路径。桌面直接 globalize_path；
-## iOS 上 res:// 在 pck 里没有真实路径，所以先把同目录镜像到 user:// 再取路径。
+## Native readers use original bytes extracted from the checked payload on mobile.
 func _spine_paths(entry: Dictionary) -> Dictionary:
 	var atlas_res := str(entry.atlas)
 	var skeleton_res := str(entry.skeleton)
@@ -381,40 +414,10 @@ func _spine_paths(entry: Dictionary) -> Dictionary:
 			"atlas": ProjectSettings.globalize_path(atlas_res),
 			"skeleton": ProjectSettings.globalize_path(skeleton_res),
 		}
-	var dir_res := atlas_res.get_base_dir()
-	var dir_user := "user://spine_cache/%d" % absi(dir_res.hash())
-	if not DirAccess.dir_exists_absolute(dir_user):
-		_mirror_dir(dir_res, dir_user)
 	return {
-		"atlas": ProjectSettings.globalize_path(dir_user.path_join(atlas_res.get_file())),
-		"skeleton": ProjectSettings.globalize_path(dir_user.path_join(skeleton_res.get_file())),
+		"atlas": ProjectSettings.globalize_path(_native_path(atlas_res)),
+		"skeleton": ProjectSettings.globalize_path(_native_path(skeleton_res)),
 	}
-
-
-func _mirror_dir(src: String, dst: String) -> void:
-	DirAccess.make_dir_recursive_absolute(dst)
-	var dir := DirAccess.open(src)
-	if dir == null:
-		return
-	dir.list_dir_begin()
-	var name := dir.get_next()
-	while name != "":
-		if name.begins_with("."):
-			name = dir.get_next()
-			continue
-		var from_path := src.path_join(name)
-		var to_path := dst.path_join(name)
-		if dir.current_is_dir():
-			_mirror_dir(from_path, to_path)
-		else:
-			var bytes := FileAccess.get_file_as_bytes(from_path)
-			if not bytes.is_empty():
-				var out := FileAccess.open(to_path, FileAccess.WRITE)
-				if out != null:
-					out.store_buffer(bytes)
-					out.close()
-		name = dir.get_next()
-	dir.list_dir_end()
 
 
 func _load_cg_group(index: int) -> void:

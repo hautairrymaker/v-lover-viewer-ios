@@ -37,6 +37,9 @@ jobs:
           du -sh assets Portraits 2>/dev/null || true
           test -f catalog.json || { echo "::error::catalog.json 缺失"; exit 1; }
 
+      - name: 准备原生加载器原文件包
+        run: python3 scripts/prepare_native_payload.py
+
       - name: 安装 Godot 与 iOS 导出模板
         run: |
           set -euo pipefail
@@ -95,6 +98,9 @@ jobs:
             grep "SCRIPT ERROR" /tmp/export.log | head -n 20
             exit 1
           fi
+          PCK="$(find build/ios -name '*.pck' -print -quit)"
+          test -n "$PCK" || { echo "::error::导出没有PCK"; exit 1; }
+          python3 scripts/prepare_native_payload.py --verify-pack "$PCK"
           GENERATED="$(find build/ios -maxdepth 2 -name '*.xcodeproj' | head -n1)"
           if [ -z "$GENERATED" ]; then
             echo "::error::Godot 没有生成 .xcodeproj"

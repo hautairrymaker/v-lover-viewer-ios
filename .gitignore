@@ -22,3 +22,5 @@ cg_voices.json
 Thumbs.db
 __pycache__/
 *.pyc
+native_payload.zip
+native_payload_manifest.json
