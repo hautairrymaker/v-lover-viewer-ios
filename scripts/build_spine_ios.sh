@@ -1,20 +1,23 @@
 #!/usr/bin/env bash
-# 尽力编译 spine-godot 的 iOS 库。上游产物命名不稳定，所以编完用 find 找回并自适应生成 .gdextension。
-# 失败不阻断构建：main.gd 用的是运行时反射，缺 Spine 只会降级 CG/Spine 模式。
+# Build pinned Spine sources and verify both device and editor-host frameworks.
 set -euo pipefail
 
-SPINE_REF="${SPINE_REF:-4.2}"
-WORK="${RUNNER_TEMP:-/tmp}/spine_runtimes"
+SPINE_REF="${SPINE_REF:-5cb78e77d3711ddcd80c7bd043bb11cf70fcc88c}"
+GODOT_CPP_REF="${GODOT_CPP_REF:-e4b7c25e721ce3435a029087e3917a30aa73f06b}"
+WORK="$(mktemp -d "${RUNNER_TEMP:-/tmp}/spine_build.XXXXXX")"
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 JOBS="$(sysctl -n hw.ncpu)"
 
-rm -rf "$WORK"
-git clone --depth 1 --branch "$SPINE_REF" --recurse-submodules --shallow-submodules \
-  https://github.com/EsotericSoftware/spine-runtimes.git "$WORK"
+git init "$WORK"
+git -C "$WORK" remote add origin https://github.com/EsotericSoftware/spine-runtimes.git
+git -C "$WORK" fetch --depth 1 origin "$SPINE_REF"
+# SConstruct derives CFBundleVersion from the branch name; detached HEAD is invalid.
+git -C "$WORK" switch -c 4.2 FETCH_HEAD
+test "$(git -C "$WORK" rev-parse HEAD)" = "$SPINE_REF"
 cd "$WORK"
 
-GD_DIR="$(find . -maxdepth 2 -type d \( -name 'spine-godot' -o -name 'spine_godot' \) | head -n 1)"
-if [ -z "$GD_DIR" ]; then
+GD_DIR="$WORK/spine-godot"
+if [ ! -d "$GD_DIR" ]; then
   echo "::warning::spine-runtimes $SPINE_REF 里找不到 spine-godot 目录"
   ls -la
   exit 1
@@ -23,12 +26,13 @@ echo "spine-godot: $GD_DIR"
 ls -la "$GD_DIR"
 cd "$GD_DIR"
 
-# spine-godot 4.2 上游的 godot-cpp 子模块是空的（submodule update 拉不到任何东西），
-# 这里直接显式克隆，并锁定到 Godot 4.4.1 对应的分支，避免 ABI 不匹配。
-if [ ! -d godot-cpp ]; then
-  git clone --depth 1 --branch godot-4.4.1-stable \
-    https://github.com/godotengine/godot-cpp.git godot-cpp
-fi
+# Match the Godot 4.4.1 bindings by immutable commit.
+git init godot-cpp
+git -C godot-cpp remote add origin https://github.com/godotengine/godot-cpp.git
+git -C godot-cpp fetch --depth 1 origin "$GODOT_CPP_REF"
+git -C godot-cpp switch --detach FETCH_HEAD
+test "$(git -C godot-cpp rev-parse HEAD)" = "$GODOT_CPP_REF"
+python3 "$PROJECT_DIR/scripts/prepare_spine_runtime.py" "$WORK"
 echo "godot-cpp: $(git -C godot-cpp describe --tags --always 2>/dev/null || echo unknown)"
 
 if [ -f SConstruct ]; then
@@ -41,17 +45,22 @@ else
   exit 1
 fi
 
-ART="$(find . \( -name '*.dylib' -o -name '*.framework' -o -name '*.a' \) | grep -i ios | head -n 1 || true)"
-if [ -z "$ART" ]; then
-  echo "::warning::spine-godot 编译后没有找到 iOS 产物"
-  find . \( -name '*.dylib' -o -name '*.framework' -o -name '*.a' \) | head -n 20 || true
-  exit 1
-fi
-
 mkdir -p "$PROJECT_DIR/addons/spine_godot/bin"
-rm -rf "$PROJECT_DIR/addons/spine_godot/bin/"*
-cp -R "$ART" "$PROJECT_DIR/addons/spine_godot/bin/"
-NAME="$(basename "$ART")"
+publish_framework() {
+  local platform="$1"
+  local name="libspine_godot.${platform}.template_release"
+  local artifact="bin/${platform}/${name}.framework"
+  test -f "$artifact/$name"
+  lipo -verify_arch arm64 "$artifact/$name"
+  nm -gU "$artifact/$name" > "$WORK/${platform}-symbols.txt"
+  grep -q '_spine_godot_library_init' "$WORK/${platform}-symbols.txt"
+  plutil -lint "$(find "$artifact" -name Info.plist -print -quit)"
+  ditto "$artifact" "$PROJECT_DIR/addons/spine_godot/bin/$(basename "$artifact")"
+}
+publish_framework ios
+# Host library is required to verify real class registration during export.
+scons platform=macos arch=arm64 target=template_release -j"$JOBS"
+publish_framework macos
 cat > "$PROJECT_DIR/spine_godot_extension.gdextension" <<EOF
 [configuration]
 
@@ -60,6 +69,9 @@ compatibility_minimum = "4.1"
 
 [libraries]
 
-ios.release.arm64 = "addons/spine_godot/bin/$NAME"
+ios.release.arm64 = "addons/spine_godot/bin/libspine_godot.ios.template_release.framework"
+macos.release.arm64 = "addons/spine_godot/bin/libspine_godot.macos.template_release.framework"
+macos.debug.arm64 = "addons/spine_godot/bin/libspine_godot.macos.template_release.framework"
+macos.editor.arm64 = "addons/spine_godot/bin/libspine_godot.macos.template_release.framework"
 EOF
-echo "已发布 Spine iOS 产物: $NAME"
+echo "Spine iOS and macOS frameworks verified."

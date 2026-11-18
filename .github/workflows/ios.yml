@@ -2,8 +2,6 @@ name: Build iOS IPA
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
 
 concurrency:
   group: ios-${{ github.ref }}
@@ -58,19 +56,20 @@ jobs:
           brew install scons
           scons --version | head -n 3
 
+      - name: 编译 spine-godot (iOS + macOS arm64，必须成功)
+        id: spine
+        run: |
+          set -euo pipefail
+          bash scripts/build_spine_ios.sh 2>&1 | tee "$RUNNER_TEMP/spine-build.log"
+
       - name: 编译 gd_cubism (iOS arm64)
         env:
           CUBISM_SDK_DIR: ${{ runner.temp }}/assets/vendor/CubismSdkForNative-5-r.1
         run: bash scripts/build_cubism_ios.sh
 
-      - name: 尝试编译 spine-godot (iOS arm64)
-        id: spine
-        continue-on-error: true
-        run: bash scripts/build_spine_ios.sh
-
       - name: 导入工程资源
         run: |
-          set -uo pipefail
+          set -euo pipefail
           "$GODOT" --headless --path . --import 2>&1 | tee /tmp/import.log | tail -n 80
           test -d .godot || { echo "::error::导入失败，没有生成 .godot"; exit 1; }
           echo "== 扩展加载情况 =="
@@ -81,9 +80,12 @@ jobs:
             exit 1
           fi
 
+      - name: 验证原生类真实注册
+        run: '"$GODOT" --headless --path . --script res://scripts/check_native_extensions.gd'
+
       - name: 导出 Xcode 工程
         run: |
-          set +e
+          set -euo pipefail
           mkdir -p build/ios
           "$GODOT" --headless --path . --export-release "iOS" "build/ios/VLoverViewer.ipa" 2>&1 | tee /tmp/export.log | tail -n 150
           echo "== build/ios 内容 =="
@@ -143,6 +145,11 @@ jobs:
             echo "::error::.app 内没有 libgd_cubism，Live2D 在真机上必然是空的"
             exit 1
           fi
+          SPINE="$APP/Frameworks/libspine_godot.ios.template_release.framework/libspine_godot.ios.template_release"
+          test -f "$SPINE" || { echo "::error::IPA 缺少 Spine 扩展，拒绝发布"; exit 1; }
+          lipo -verify_arch arm64 "$SPINE"
+          nm -gU "$SPINE" > /tmp/spine-app-symbols.txt
+          grep -q '_spine_godot_library_init' /tmp/spine-app-symbols.txt
           find "$APP" -name '*.pck' | head -n1 | grep -q . || echo "::warning::.app 里没找到 pck"
 
       - name: 打包未签名 IPA

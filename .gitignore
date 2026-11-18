@@ -20,3 +20,5 @@ cg_voices.json
 # 本地环境
 .DS_Store
 Thumbs.db
+__pycache__/
+*.pyc
