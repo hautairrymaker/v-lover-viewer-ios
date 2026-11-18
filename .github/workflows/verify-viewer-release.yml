@@ -18,9 +18,9 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/viewer-story-check"
-          gh api "repos/$GITHUB_REPOSITORY/releases/tags/viewer-story-build-20" \
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/viewer-story-build-21" \
             > "$RUNNER_TEMP/viewer-story-check/release.json"
-          gh release download viewer-story-build-20 --repo "$GITHUB_REPOSITORY" \
+          gh release download viewer-story-build-21 --repo "$GITHUB_REPOSITORY" \
             --pattern V-Lover-Viewer-Story-unsigned.ipa --dir "$RUNNER_TEMP/viewer-story-check"
       - name: Inspect the actual IPA native binaries and story resources
         run: |
