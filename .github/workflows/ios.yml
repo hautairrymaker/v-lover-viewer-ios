@@ -76,6 +76,21 @@ jobs:
           mv "$RUNNER_TEMP/tpl/templates" "$HOME/Library/Application Support/Godot/export_templates/${GODOT_VERSION}.stable"
           ls "$HOME/Library/Application Support/Godot/export_templates/${GODOT_VERSION}.stable" | grep -i ios | head
 
+      - name: 验证iOS剧情原生路径使用真实解包文件
+        run: |
+          set -euo pipefail
+          PROBE="$RUNNER_TEMP/story-native-path-probe"
+          python3 scripts/make_story_path_probe.py --source . --destination "$PROBE"
+          "$GODOT" --headless --path "$PROBE" --export-pack "Path Probe" "$PROBE/probe.pck" \
+            > "$RUNNER_TEMP/story-path-export.log" 2>&1
+          STORY_PATH_RESULT="$RUNNER_TEMP/story-path-result.json" \
+            "$GODOT" --headless --main-pack "$PROBE/probe.pck" --script res://probe.gd \
+            > "$RUNNER_TEMP/story-path-test.log" 2>&1
+          grep 'STORY_PATH_PROBE' "$RUNNER_TEMP/story-path-test.log"
+          if grep -qE 'SCRIPT ERROR|^ERROR:' "$RUNNER_TEMP/story-path-export.log" "$RUNNER_TEMP/story-path-test.log"; then
+            exit 1
+          fi
+
       - name: 保留原生模型原文件
         run: python3 scripts/prepare_story_payload.py
 
@@ -128,6 +143,19 @@ jobs:
           grep 'VIEWER_STORY_TEST' "$RUNNER_TEMP/player-test.log"
           if grep -qE 'SCRIPT ERROR|^ERROR:' "$RUNNER_TEMP/player-test.log"; then
             grep -E 'SCRIPT ERROR|^ERROR:' "$RUNNER_TEMP/player-test.log" | head -n 20
+            exit 1
+          fi
+
+      - name: 验证25段剧情经过站桩对话进入CG
+        run: |
+          set -euo pipefail
+          VL_FAST=1 VL_FAST_SAY_DELAY_MS=0 \
+            CG_TRANSITION_RESULT="$RUNNER_TEMP/story-cg-transition-result.json" \
+            "$GODOT" --headless --path . --script res://scripts/test_story_cg_transition.gd \
+            > "$RUNNER_TEMP/story-cg-transition.log" 2>&1
+          grep 'CG_TRANSITION_RESULT' "$RUNNER_TEMP/story-cg-transition.log"
+          if grep -qE 'SCRIPT ERROR|^ERROR:' "$RUNNER_TEMP/story-cg-transition.log"; then
+            grep -E 'SCRIPT ERROR|^ERROR:' "$RUNNER_TEMP/story-cg-transition.log" | head -n 20
             exit 1
           fi
 

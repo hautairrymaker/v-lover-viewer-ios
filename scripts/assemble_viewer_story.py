@@ -48,6 +48,10 @@ def assemble(viewer, story, code, destination):
                  destination / "scripts/capture_viewer_story.gd")
     shutil.copy2(code / "story_player/test_viewer_close.gd",
                  destination / "scripts/test_viewer_close.gd")
+    shutil.copy2(code / "story_player/native_resource_path.gd",
+                 destination / "scripts/native_resource_path.gd")
+    shutil.copy2(code / "story_player/test_story_cg_transition.gd",
+                 destination / "scripts/test_story_cg_transition.gd")
     main = (destination / "main.gd").read_text(encoding="utf-8")
     if "var story_host" in main:
         raise ValueError("Expected an unmodified viewer16 main")
